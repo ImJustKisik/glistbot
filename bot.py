@@ -33,6 +33,14 @@ async def main():
     except Exception as e:
         print(f'Ошибка при загрузке модуля верификации: {e}')
         return
+    
+    # Загружаем модуль статистики
+    try:
+        await bot.load_extension('stats_cog')
+        print('Модуль статистики загружен.')
+    except Exception as e:
+        print(f'Ошибка при загрузке модуля статистики: {e}')
+        # Продолжаем работу, даже если статистика не загрузилась
 
     # Получаем токен из переменных окружения
     token = os.getenv("BOT_TOKEN")

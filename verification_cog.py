@@ -134,6 +134,23 @@ class ManualVerificationView(View):
                 method="модератор",
                 moderator=interaction.user
             )
+            
+            # Логирование в БД статистики
+            try:
+                stats_cog = interaction.client.get_cog('StatsCog')
+                if stats_cog:
+                    stats_cog.log_verification_to_db(
+                        user_id=member.id,
+                        username=member.name,
+                        guild_id=interaction.guild.id,
+                        status="успешно",
+                        method="модератор",
+                        verification_level=config["VERIFICATION_LEVEL"],
+                        moderator_id=interaction.user.id,
+                        moderator_name=interaction.user.name
+                    )
+            except Exception as e:
+                print(f"Ошибка при логировании в статистику: {e}")
 
             # Обновляем исходное сообщение
             new_embed = interaction.message.embeds[0]
@@ -178,6 +195,27 @@ class ManualVerificationView(View):
                 method="модератор",
                 moderator=interaction.user
             )
+            
+            # Логирование в БД статистики
+            try:
+                # Загружаем конфиг для получения verification_level
+                with open('config.json', 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                
+                stats_cog = interaction.client.get_cog('StatsCog')
+                if stats_cog:
+                    stats_cog.log_verification_to_db(
+                        user_id=member.id,
+                        username=member.name,
+                        guild_id=interaction.guild.id,
+                        status="отклонено",
+                        method="модератор",
+                        verification_level=config.get("VERIFICATION_LEVEL", 3),
+                        moderator_id=interaction.user.id,
+                        moderator_name=interaction.user.name
+                    )
+            except Exception as e:
+                print(f"Ошибка при логировании в статистику: {e}")
 
             new_embed = interaction.message.embeds[0]
             new_embed.color = discord.Color.red()
@@ -195,6 +233,18 @@ class VerificationCog(commands.Cog):
         self.bot = bot
         # Регистрируем View, чтобы кнопки работали после перезапуска бота
         self.bot.add_view(ManualVerificationView())
+        
+    def log_to_stats_db(self, user_id: int, username: str, guild_id: int, status: str, 
+                        method: str, verification_level: int, moderator_id: int = None, 
+                        moderator_name: str = None):
+        """Вспомогательная функция для логирования в БД статистики"""
+        try:
+            stats_cog = self.bot.get_cog('StatsCog')
+            if stats_cog:
+                stats_cog.log_verification_to_db(user_id, username, guild_id, status, 
+                                                method, verification_level, moderator_id, moderator_name)
+        except Exception as e:
+            print(f"Ошибка при логировании в статистику: {e}")
 
     # --- Команда для смены уровня верификации ---
     @commands.command()
@@ -348,6 +398,16 @@ class VerificationCog(commands.Cog):
                 status="успешно",
                 method="команда"
             )
+            
+            # Логирование в БД статистики
+            self.log_to_stats_db(
+                user_id=ctx.author.id,
+                username=ctx.author.name,
+                guild_id=ctx.guild.id,
+                status="успешно",
+                method="команда",
+                verification_level=config["VERIFICATION_LEVEL"]
+            )
         except discord.Forbidden:
             await ctx.send("❌ У бота недостаточно прав для изменения ролей.", delete_after=5)
         except discord.HTTPException as e:
@@ -415,6 +475,16 @@ class VerificationCog(commands.Cog):
                 member=member,
                 status="успешно",
                 method="qr-код"
+            )
+            
+            # Логирование в БД статистики
+            self.log_to_stats_db(
+                user_id=member.id,
+                username=member.name,
+                guild_id=guild.id,
+                status="успешно",
+                method="qr-код",
+                verification_level=config["VERIFICATION_LEVEL"]
             )
         except discord.Forbidden:
             await ctx.send("❌ У бота недостаточно прав для изменения ролей.")
