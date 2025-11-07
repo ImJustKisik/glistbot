@@ -1,9 +1,10 @@
 import discord
 from discord.ext import commands
-import json
 import sqlite3
 from datetime import datetime, timedelta
+from discord.utils import utcnow
 from typing import Dict, List, Tuple
+from config_manager import config_manager
 
 class StatsCog(commands.Cog):
     def __init__(self, bot):
@@ -55,6 +56,12 @@ class StatsCog(commands.Cog):
             )
         ''')
         
+        # --- Индексы для ускорения запросов ---
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_verif_guild_time ON verifications(guild_id, timestamp)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_verif_user ON verifications(user_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_attempts_user ON verification_attempts(user_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_member_joins_guild_time ON member_joins(guild_id, timestamp)")
+
         conn.commit()
         conn.close()
 
@@ -109,7 +116,7 @@ class StatsCog(commands.Cog):
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
-            date_threshold = datetime.now() - timedelta(days=days)
+            date_threshold = utcnow() - timedelta(days=days)
             
             # Общее количество верификаций
             cursor.execute('''
@@ -241,7 +248,7 @@ class StatsCog(commands.Cog):
             title=f"📊 Статистика сервера {ctx.guild.name}",
             description=f"Данные за последние **{days} дней**",
             color=discord.Color.blue(),
-            timestamp=datetime.now()
+            timestamp=utcnow()
         )
 
         # Общая информация
@@ -309,7 +316,7 @@ class StatsCog(commands.Cog):
             title="🔐 Статистика верификаций",
             description=f"Детальная информация по верификациям на сервере **{ctx.guild.name}**",
             color=discord.Color.gold(),
-            timestamp=datetime.now()
+            timestamp=utcnow()
         )
 
         # Статистика за 7 дней
@@ -347,17 +354,12 @@ class StatsCog(commands.Cog):
             )
 
         # Текущая конфигурация
-        try:
-            with open('config.json', 'r', encoding='utf-8') as f:
-                config = json.load(f)
-            level = config.get("VERIFICATION_LEVEL", "?")
-            embed.add_field(
-                name="⚙️ Текущие настройки",
-                value=f"Уровень верификации: **{level}**",
-                inline=False
-            )
-        except:
-            pass
+        level = config_manager.get("VERIFICATION_LEVEL", "?")
+        embed.add_field(
+            name="⚙️ Текущие настройки",
+            value=f"Уровень верификации: **{level}**",
+            inline=False
+        )
 
         embed.set_footer(text=f"Запросил: {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
         await ctx.send(embed=embed)
@@ -371,8 +373,8 @@ class StatsCog(commands.Cog):
         Использование: !recentverif [количество]
         Пример: !recentverif 15
         """
-        if limit < 1 or limit > 50:
-            await ctx.send("❌ Укажите количество от 1 до 50.")
+        if limit < 1 or limit > 25:
+            await ctx.send("❌ Укажите количество от 1 до 25.")
             return
 
         recent = self.get_recent_verifications(ctx.guild.id, limit)
@@ -384,7 +386,7 @@ class StatsCog(commands.Cog):
         embed = discord.Embed(
             title=f"📋 Последние {len(recent)} верификаций",
             color=discord.Color.blue(),
-            timestamp=datetime.now()
+            timestamp=utcnow()
         )
 
         for entry in recent:
@@ -458,7 +460,7 @@ class StatsCog(commands.Cog):
         embed = discord.Embed(
             title=f"👤 Информация о пользователе",
             color=member.color if member.color != discord.Color.default() else discord.Color.blue(),
-            timestamp=datetime.now()
+            timestamp=utcnow()
         )
 
         embed.set_thumbnail(url=member.display_avatar.url)
@@ -481,8 +483,8 @@ class StatsCog(commands.Cog):
         )
 
         # Даты
-        account_age = (datetime.now() - member.created_at.replace(tzinfo=None)).days
-        join_age = (datetime.now() - member.joined_at.replace(tzinfo=None)).days if member.joined_at else 0
+        account_age = (utcnow() - member.created_at).days
+        join_age = (utcnow() - member.joined_at).days if member.joined_at else 0
         
         embed.add_field(
             name="Аккаунт создан",
@@ -542,7 +544,7 @@ class StatsCog(commands.Cog):
     @commands.Cog.listener()
     async def on_member_join(self, member):
         """Автоматически логирует присоединение участника"""
-        account_age = (datetime.now() - member.created_at.replace(tzinfo=None)).days
+        account_age = (utcnow() - member.created_at).days
         self.log_member_join(member.id, member.name, member.guild.id, account_age)
 
 # --- Функция для загрузки Cog ---

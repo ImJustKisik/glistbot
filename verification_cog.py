@@ -1,21 +1,13 @@
 import discord
 from discord.ext import commands
 from discord.ui import View, Button, button
-import json
 import random
 import string
 import urllib.parse
 import os
-from datetime import datetime
-
-# --- Вспомогательная функция для обновления JSON ---
-def update_config(key, value):
-    with open('config.json', 'r+') as f:
-        data = json.load(f)
-        data[key] = value
-        f.seek(0)
-        json.dump(data, f, indent=2)
-        f.truncate()
+from discord.utils import utcnow
+from datetime import datetime, timedelta
+from config_manager import config_manager
 
 # --- Хранилище временных данных ---
 # В реальном проекте лучше использовать базу данных (например, SQLite)
@@ -32,9 +24,7 @@ async def log_verification(bot, guild_id: int, member: discord.Member, status: s
     - moderator: модератор (только для ручной верификации)
     """
     try:
-        with open('config.json', 'r', encoding='utf-8') as f:
-            config = json.load(f)
-        
+        config = config_manager.get_all()
         log_channel_id = config.get("LOG_CHANNEL_ID")
         if not log_channel_id:
             return
@@ -57,7 +47,7 @@ async def log_verification(bot, guild_id: int, member: discord.Member, status: s
         embed = discord.Embed(
             title=f"{emoji} Логирование верификации",
             color=color,
-            timestamp=datetime.now()
+            timestamp=utcnow()
         )
         
         embed.add_field(name="Пользователь", value=f"{member.mention} ({member.name})", inline=True)
@@ -78,161 +68,18 @@ async def log_verification(bot, guild_id: int, member: discord.Member, status: s
     except Exception as e:
         print(f"Ошибка при логировании верификации: {e}")
 
-# --- Класс для постоянных кнопок модерации ---
+# --- Класс для кнопок модерации ---
 class ManualVerificationView(View):
-    def __init__(self):
-        # timeout=None делает кнопки постоянными (не исчезают после перезапуска)
-        super().__init__(timeout=None)
-
-    @button(label="Одобрить", style=discord.ButtonStyle.green, custom_id="approve_button")
-    async def approve(self, interaction: discord.Interaction, button: Button):
-        # Проверка прав модератора
-        if not interaction.user.guild_permissions.manage_roles:
-            await interaction.response.send_message("❌ У вас недостаточно прав для выполнения этого действия.", ephemeral=True)
-            return
-
-        # Извлекаем ID пользователя из сообщения
-        try:
-            member_id = int(interaction.message.embeds[0].footer.text.split(": ")[1])
-            member = interaction.guild.get_member(member_id)
-        except (IndexError, ValueError, AttributeError) as e:
-            await interaction.response.send_message("Не удалось найти ID пользователя в сообщении.", ephemeral=True)
-            print(f"Ошибка при извлечении ID: {e}")
-            return
-
-        if not member:
-            await interaction.response.send_message(f"Пользователь с ID `{member_id}` не найден на сервере.", ephemeral=True)
-            return
-
-        # Загружаем роли из конфига
-        try:
-            with open('config.json', 'r', encoding='utf-8') as f:
-                config = json.load(f)
-        except Exception as e:
-            await interaction.response.send_message("❌ Ошибка при чтении конфигурации.", ephemeral=True)
-            print(f"Ошибка при чтении config.json: {e}")
-            return
-
-        verified_role = interaction.guild.get_role(config["VERIFIED_ROLE_ID"])
-        unverified_role = interaction.guild.get_role(config["UNVERIFIED_ROLE_ID"])
-
-        if not verified_role or not unverified_role:
-            await interaction.response.send_message("❌ Ошибка: Роли не найдены. Проверьте ID в конфиге.", ephemeral=True)
-            return
-
-        try:
-            await member.add_roles(verified_role, reason=f"Одобрено модератором {interaction.user.name}")
-            await member.remove_roles(unverified_role, reason="Верификация пройдена")
-            await interaction.response.send_message(f"✅ Пользователь {member.mention} был одобрен.", ephemeral=True)
-
-            # Логирование
-            await log_verification(
-                bot=interaction.client,
-                guild_id=interaction.guild.id,
-                member=member,
-                status="успешно",
-                method="модератор",
-                moderator=interaction.user
-            )
-            
-            # Логирование в БД статистики
-            try:
-                stats_cog = interaction.client.get_cog('StatsCog')
-                if stats_cog:
-                    stats_cog.log_verification_to_db(
-                        user_id=member.id,
-                        username=member.name,
-                        guild_id=interaction.guild.id,
-                        status="успешно",
-                        method="модератор",
-                        verification_level=config["VERIFICATION_LEVEL"],
-                        moderator_id=interaction.user.id,
-                        moderator_name=interaction.user.name
-                    )
-            except Exception as e:
-                print(f"Ошибка при логировании в статистику: {e}")
-
-            # Обновляем исходное сообщение
-            new_embed = interaction.message.embeds[0]
-            new_embed.color = discord.Color.green()
-            new_embed.description = f"**Статус: Одобрено**\nМодератор: {interaction.user.mention}"
-            await interaction.message.edit(embed=new_embed, view=None) # Удаляем кнопки
-        except discord.Forbidden:
-            await interaction.response.send_message("❌ У бота недостаточно прав для изменения ролей.", ephemeral=True)
-        except discord.HTTPException as e:
-            await interaction.response.send_message(f"❌ Ошибка при изменении ролей: {e}", ephemeral=True)
-            print(f"HTTPException при одобрении: {e}")
-
-    @button(label="Отклонить", style=discord.ButtonStyle.red, custom_id="deny_button")
-    async def deny(self, interaction: discord.Interaction, button: Button):
-        # Проверка прав модератора
-        if not interaction.user.guild_permissions.kick_members:
-            await interaction.response.send_message("❌ У вас недостаточно прав для выполнения этого действия.", ephemeral=True)
-            return
-
-        try:
-            member_id = int(interaction.message.embeds[0].footer.text.split(": ")[1])
-            member = interaction.guild.get_member(member_id)
-        except (IndexError, ValueError, AttributeError) as e:
-            await interaction.response.send_message("Не удалось найти ID пользователя в сообщении.", ephemeral=True)
-            print(f"Ошибка при извлечении ID: {e}")
-            return
-
-        if not member:
-            await interaction.response.send_message(f"Пользователь с ID `{member_id}` не найден на сервере.", ephemeral=True)
-            return
-
-        try:
-            await member.kick(reason=f"Отклонено модератором {interaction.user.name}")
-            await interaction.response.send_message(f"❌ Пользователь {member.mention} был кикнут.", ephemeral=True)
-
-            # Логирование
-            await log_verification(
-                bot=interaction.client,
-                guild_id=interaction.guild.id,
-                member=member,
-                status="отклонено",
-                method="модератор",
-                moderator=interaction.user
-            )
-            
-            # Логирование в БД статистики
-            try:
-                # Загружаем конфиг для получения verification_level
-                with open('config.json', 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-                
-                stats_cog = interaction.client.get_cog('StatsCog')
-                if stats_cog:
-                    stats_cog.log_verification_to_db(
-                        user_id=member.id,
-                        username=member.name,
-                        guild_id=interaction.guild.id,
-                        status="отклонено",
-                        method="модератор",
-                        verification_level=config.get("VERIFICATION_LEVEL", 3),
-                        moderator_id=interaction.user.id,
-                        moderator_name=interaction.user.name
-                    )
-            except Exception as e:
-                print(f"Ошибка при логировании в статистику: {e}")
-
-            new_embed = interaction.message.embeds[0]
-            new_embed.color = discord.Color.red()
-            new_embed.description = f"**Статус: Отклонено (кик)**\nМодератор: {interaction.user.mention}"
-            await interaction.message.edit(embed=new_embed, view=None)
-        except discord.Forbidden:
-            await interaction.response.send_message("❌ У бота недостаточно прав для кика этого пользователя.", ephemeral=True)
-        except discord.HTTPException as e:
-            await interaction.response.send_message(f"❌ Ошибка при кике: {e}", ephemeral=True)
-            print(f"HTTPException при кике: {e}")
+    def __init__(self, member_id: int):
+        super().__init__(timeout=86400)  # 24 часа на принятие решения
+        # Динамически добавляем кнопки с уникальным custom_id
+        self.add_item(Button(label="Одобрить", style=discord.ButtonStyle.green, custom_id=f"approve:{member_id}"))
+        self.add_item(Button(label="Отклонить", style=discord.ButtonStyle.red, custom_id=f"deny:{member_id}"))
 
 # --- Основной класс модуля (Cog) ---
 class VerificationCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        # Регистрируем View, чтобы кнопки работали после перезапуска бота
-        self.bot.add_view(ManualVerificationView())
         
     def log_to_stats_db(self, user_id: int, username: str, guild_id: int, status: str, 
                         method: str, verification_level: int, moderator_id: int = None, 
@@ -246,12 +93,102 @@ class VerificationCog(commands.Cog):
         except Exception as e:
             print(f"Ошибка при логировании в статистику: {e}")
 
+    @commands.Cog.listener()
+    async def on_interaction(self, interaction: discord.Interaction):
+        custom_id = interaction.data.get("custom_id")
+        if not custom_id or ":" not in custom_id:
+            return
+
+        action, member_id_str = custom_id.split(":", 1)
+        
+        if action not in ["approve", "deny"]:
+            return
+
+        # Проверка прав модератора
+        if not interaction.user.guild_permissions.manage_roles:
+            await interaction.response.send_message("❌ У вас недостаточно прав для выполнения этого действия.", ephemeral=True)
+            return
+        
+        try:
+            member_id = int(member_id_str)
+            member = interaction.guild.get_member(member_id)
+        except (ValueError, AttributeError):
+            await interaction.response.send_message("Не удалось обработать ID пользователя.", ephemeral=True)
+            return
+
+        if not member:
+            await interaction.response.send_message(f"Пользователь с ID `{member_id}` не найден на сервере.", ephemeral=True)
+            # Отключаем кнопки, так как пользователь ушел
+            try:
+                await interaction.message.edit(view=None)
+            except (discord.NotFound, discord.HTTPException):
+                pass
+            return
+            
+        config = config_manager.get_all()
+
+        if action == "approve":
+            verified_role = interaction.guild.get_role(config["VERIFIED_ROLE_ID"])
+            unverified_role = interaction.guild.get_role(config["UNVERIFIED_ROLE_ID"])
+
+            if not verified_role or not unverified_role:
+                await interaction.response.send_message("❌ Ошибка: Роли не найдены. Проверьте ID в конфиге.", ephemeral=True)
+                return
+
+            try:
+                await member.add_roles(verified_role, reason=f"Одобрено модератором {interaction.user.name}")
+                await member.remove_roles(unverified_role, reason="Верификация пройдена")
+                await interaction.response.send_message(f"✅ Пользователь {member.mention} был одобрен.", ephemeral=True)
+
+                await log_verification(self.bot, interaction.guild.id, member, "успешно", "модератор", interaction.user)
+                self.log_to_stats_db(member.id, member.name, interaction.guild.id, "успешно", "модератор", config["VERIFICATION_LEVEL"], interaction.user.id, interaction.user.name)
+
+                new_embed = interaction.message.embeds[0]
+                new_embed.color = discord.Color.green()
+                new_embed.description = f"**Статус: Одобрено**\nМодератор: {interaction.user.mention}"
+                await interaction.message.edit(embed=new_embed, view=None)
+            except discord.Forbidden:
+                await interaction.response.send_message("❌ У бота недостаточно прав для изменения ролей.", ephemeral=True)
+            except discord.HTTPException as e:
+                await interaction.response.send_message(f"❌ Ошибка при изменении ролей: {e}", ephemeral=True)
+
+        elif action == "deny":
+            if not interaction.user.guild_permissions.kick_members:
+                await interaction.response.send_message("❌ У вас недостаточно прав для кика пользователей.", ephemeral=True)
+                return
+
+            if member.guild_permissions.administrator:
+                await interaction.response.send_message("❌ Нельзя кикнуть администратора.", ephemeral=True)
+                return
+            if member.top_role >= interaction.guild.me.top_role:
+                await interaction.response.send_message("❌ Нельзя кикнуть пользователя с ролью выше или равной роли бота.", ephemeral=True)
+                return
+            if member.id == interaction.client.user.id:
+                await interaction.response.send_message("❌ Бота нельзя кикнуть самого себя.", ephemeral=True)
+                return
+
+            try:
+                await member.kick(reason=f"Отклонено модератором {interaction.user.name}")
+                await interaction.response.send_message(f"❌ Пользователь {member.mention} был кикнут.", ephemeral=True)
+
+                await log_verification(self.bot, interaction.guild.id, member, "отклонено", "модератор", interaction.user)
+                self.log_to_stats_db(member.id, member.name, interaction.guild.id, "отклонено", "модератор", config["VERIFICATION_LEVEL"], interaction.user.id, interaction.user.name)
+
+                new_embed = interaction.message.embeds[0]
+                new_embed.color = discord.Color.red()
+                new_embed.description = f"**Статус: Отклонено (кик)**\nМодератор: {interaction.user.mention}"
+                await interaction.message.edit(embed=new_embed, view=None)
+            except discord.Forbidden:
+                await interaction.response.send_message("❌ У бота недостаточно прав для кика этого пользователя.", ephemeral=True)
+            except discord.HTTPException as e:
+                await interaction.response.send_message(f"❌ Ошибка при кике: {e}", ephemeral=True)
+
     # --- Команда для смены уровня верификации ---
     @commands.command()
     @commands.has_permissions(administrator=True)
     async def setlevel(self, ctx, level: int):
         if 1 <= level <= 3:
-            update_config("VERIFICATION_LEVEL", level)
+            config_manager.update_config("VERIFICATION_LEVEL", level)
             await ctx.send(f"✅ Уровень верификации изменен на **{level}**.")
         else:
             await ctx.send("❌ Неверный уровень. Пожалуйста, выберите от 1 до 3.")
@@ -259,13 +196,7 @@ class VerificationCog(commands.Cog):
     # --- Главное событие: новый пользователь на сервере ---
     @commands.Cog.listener()
     async def on_member_join(self, member):
-        try:
-            with open('config.json', 'r', encoding='utf-8') as f:
-                config = json.load(f)
-        except Exception as e:
-            print(f"Ошибка при чтении config.json: {e}")
-            return
-
+        config = config_manager.get_all()
         unverified_role = member.guild.get_role(config["UNVERIFIED_ROLE_ID"])
         if unverified_role:
             try:
@@ -297,7 +228,7 @@ class VerificationCog(commands.Cog):
                         title="👋 Добро пожаловать!",
                         description=f"Привет, {member.mention}! Добро пожаловать на сервер **{member.guild.name}**!",
                         color=discord.Color.blue(),
-                        timestamp=datetime.now()
+                        timestamp=utcnow()
                     )
                     embed.add_field(
                         name="🔐 Верификация",
@@ -320,7 +251,11 @@ class VerificationCog(commands.Cog):
         elif level == 2:
             # Логика для уровня 2: QR-код
             token = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
-            pending_verifications[member.id] = token
+            # Сохраняем токен и время его создания
+            pending_verifications[member.id] = {
+                "token": token,
+                "timestamp": utcnow()
+            }
             encoded_text = urllib.parse.quote(f"Ваш код: {token}")
             qr_url = f"https://quickchart.io/qr?text={encoded_text}&size=250"
 
@@ -349,7 +284,8 @@ class VerificationCog(commands.Cog):
                 embed.set_footer(text=f"ID пользователя: {member.id}")
 
                 try:
-                    await mod_channel.send(embed=embed, view=ManualVerificationView())
+                    # Создаем View с ID пользователя для кнопок
+                    await mod_channel.send(embed=embed, view=ManualVerificationView(member.id))
                 except discord.Forbidden:
                     print(f"Не удалось отправить сообщение в канал модерации: недостаточно прав")
                 except discord.HTTPException as e:
@@ -359,13 +295,7 @@ class VerificationCog(commands.Cog):
     @commands.command()
     async def verify(self, ctx):
         # Только для уровня 1
-        try:
-            with open('config.json', 'r', encoding='utf-8') as f:
-                config = json.load(f)
-        except Exception as e:
-            print(f"Ошибка при чтении config.json: {e}")
-            await ctx.send("❌ Ошибка конфигурации.", delete_after=5)
-            return
+        config = config_manager.get_all()
 
         if config["VERIFICATION_LEVEL"] != 1:
             return
@@ -422,25 +352,27 @@ class VerificationCog(commands.Cog):
     @commands.command()
     @commands.dm_only() # Команда работает только в ЛС
     async def code(self, ctx, provided_code: str):
-        try:
-            with open('config.json', 'r', encoding='utf-8') as f:
-                config = json.load(f)
-        except Exception as e:
-            print(f"Ошибка при чтении config.json: {e}")
-            await ctx.send("❌ Ошибка конфигурации.")
-            return
+        config = config_manager.get_all()
 
         if config["VERIFICATION_LEVEL"] != 2:
             return
 
         author_id = ctx.author.id
-        if author_id not in pending_verifications:
+        verification_data = pending_verifications.get(author_id)
+
+        if not verification_data:
             await ctx.send("❌ У вас нет активного кода верификации.")
+            return
+
+        # Проверка срока действия кода (15 минут)
+        if utcnow() - verification_data["timestamp"] > timedelta(minutes=15):
+            del pending_verifications[author_id]
+            await ctx.send("❌ Ваш код верификации истек. Пожалуйста, запросите новый с помощью команды `!resendcode`.")
             return
 
         # Удаляем возможные спойлеры и лишние пробелы в введённом коде
         cleaned_input = provided_code.strip().replace('||', '')
-        if pending_verifications[author_id].lower() != cleaned_input.lower():
+        if verification_data["token"].lower() != cleaned_input.lower():
             await ctx.send("❌ Неверный код.")
             return
 
@@ -496,13 +428,7 @@ class VerificationCog(commands.Cog):
     @commands.dm_only() # Команда работает только в ЛС
     async def resendcode(self, ctx):
         """Повторная отправка QR-кода для верификации"""
-        try:
-            with open('config.json', 'r', encoding='utf-8') as f:
-                config = json.load(f)
-        except Exception as e:
-            print(f"Ошибка при чтении config.json: {e}")
-            await ctx.send("❌ Ошибка конфигурации.")
-            return
+        config = config_manager.get_all()
 
         if config["VERIFICATION_LEVEL"] != 2:
             await ctx.send("❌ Эта команда доступна только при уровне верификации 2 (QR-код).")
@@ -527,13 +453,17 @@ class VerificationCog(commands.Cog):
             return
 
         # Генерируем новый код (или используем существующий)
-        if author_id in pending_verifications:
-            token = pending_verifications[author_id]
-            message_text = "Вот ваш **существующий** код верификации:"
+        verification_data = pending_verifications.get(author_id)
+        if verification_data and utcnow() - verification_data["timestamp"] < timedelta(minutes=15):
+            token = verification_data["token"]
+            message_text = "Вот ваш **существующий** код верификации (действителен еще несколько минут):"
         else:
             token = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
-            pending_verifications[author_id] = token
-            message_text = "Вот ваш **новый** код верификации:"
+            pending_verifications[author_id] = {
+                "token": token,
+                "timestamp": utcnow()
+            }
+            message_text = "Вот ваш **новый** код верификации (действителен 15 минут):"
 
         # Создаём QR-код
         encoded_text = urllib.parse.quote(f"Ваш код: {token}")
@@ -550,7 +480,7 @@ class VerificationCog(commands.Cog):
             value="После сканирования QR-кода отправьте мне код командой:\n`!code ВАШ_КОД`\nИли просто отправьте код как текст в этом чате.",
             inline=False
         )
-        embed.set_footer(text="Код действителен до перезапуска бота")
+        embed.set_footer(text="Код действителен 15 минут")
 
         try:
             await ctx.send(embed=embed)
