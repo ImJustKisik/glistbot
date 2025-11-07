@@ -241,7 +241,7 @@ class StatsCog(commands.Cog):
             title=f"📊 Статистика сервера {ctx.guild.name}",
             description=f"Данные за последние **{days} дней**",
             color=discord.Color.blue(),
-            timestamp=datetime.utcnow()
+            timestamp=datetime.now()
         )
 
         # Общая информация
@@ -309,7 +309,7 @@ class StatsCog(commands.Cog):
             title="🔐 Статистика верификаций",
             description=f"Детальная информация по верификациям на сервере **{ctx.guild.name}**",
             color=discord.Color.gold(),
-            timestamp=datetime.utcnow()
+            timestamp=datetime.now()
         )
 
         # Статистика за 7 дней
@@ -384,7 +384,7 @@ class StatsCog(commands.Cog):
         embed = discord.Embed(
             title=f"📋 Последние {len(recent)} верификаций",
             color=discord.Color.blue(),
-            timestamp=datetime.utcnow()
+            timestamp=datetime.now()
         )
 
         for entry in recent:
@@ -457,8 +457,8 @@ class StatsCog(commands.Cog):
         # Создаем embed
         embed = discord.Embed(
             title=f"👤 Информация о пользователе",
-            color=member.color,
-            timestamp=datetime.utcnow()
+            color=member.color if member.color != discord.Color.default() else discord.Color.blue(),
+            timestamp=datetime.now()
         )
 
         embed.set_thumbnail(url=member.display_avatar.url)
@@ -481,8 +481,8 @@ class StatsCog(commands.Cog):
         )
 
         # Даты
-        account_age = (datetime.utcnow() - member.created_at).days
-        join_age = (datetime.utcnow() - member.joined_at).days if member.joined_at else 0
+        account_age = (datetime.now() - member.created_at.replace(tzinfo=None)).days
+        join_age = (datetime.now() - member.joined_at.replace(tzinfo=None)).days if member.joined_at else 0
         
         embed.add_field(
             name="Аккаунт создан",
@@ -542,7 +542,7 @@ class StatsCog(commands.Cog):
     @commands.Cog.listener()
     async def on_member_join(self, member):
         """Автоматически логирует присоединение участника"""
-        account_age = (datetime.utcnow() - member.created_at).days
+        account_age = (datetime.now() - member.created_at.replace(tzinfo=None)).days
         self.log_member_join(member.id, member.name, member.guild.id, account_age)
 
 # --- Функция для загрузки Cog ---

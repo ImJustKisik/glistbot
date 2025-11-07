@@ -57,7 +57,7 @@ async def log_verification(bot, guild_id: int, member: discord.Member, status: s
         embed = discord.Embed(
             title=f"{emoji} Логирование верификации",
             color=color,
-            timestamp=datetime.utcnow()
+            timestamp=datetime.now()
         )
         
         embed.add_field(name="Пользователь", value=f"{member.mention} ({member.name})", inline=True)
@@ -297,7 +297,7 @@ class VerificationCog(commands.Cog):
                         title="👋 Добро пожаловать!",
                         description=f"Привет, {member.mention}! Добро пожаловать на сервер **{member.guild.name}**!",
                         color=discord.Color.blue(),
-                        timestamp=datetime.utcnow()
+                        timestamp=datetime.now()
                     )
                     embed.add_field(
                         name="🔐 Верификация",
